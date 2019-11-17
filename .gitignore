@@ -1,2 +1,6 @@
 *.txt
 *.swp
+
+metastore_db/*
+
+*.log
