@@ -1,74 +1,67 @@
-import org.apache.spark.ml.{Pipeline, PipelineModel}
+import org.apache.spark.ml.{Pipeline, PipelineModel, PipelineStage}
 import org.apache.spark.ml.classification.LogisticRegression
-import org.apache.spark.ml.feature.{CountVectorizer, Tokenizer, RegexTokenizer, StopWordsRemover, IDF}
+import org.apache.spark.ml.feature.{CountVectorizer, CountVectorizerModel, Tokenizer, RegexTokenizer, StopWordsRemover, IDF}
 import org.apache.spark.ml.linalg.Vector
-import org.apache.spark.sql.{DataFrame, Row}
+import org.apache.spark.sql.{DataFrame, Row, Column}
 import org.apache.spark.sql.expressions.{MutableAggregationBuffer, UserDefinedAggregateFunction}
 import org.apache.spark.sql.types._
+import org.apache.spark.sql.functions._
+import spark.implicits._
 
 def json_to_rdd(path: String, columns: Array[String] = Array("*")): DataFrame = {
   val df = spark.read.json(path)
   return df.select(columns.head, columns.tail: _*)
-  // // Creates a temporary view using the DataFrame
-  // df.createOrReplaceTempView("tmp")
-
-  // // Concatenate the specified column names with comma
-  // val columns_string: String = columns.mkString(", ")
-
-  // // filter out the specified columns from the dataset
-  // return spark.sql(f"SELECT $columns_string%s FROM tmp")
 }
 
-def preprocessing(df: DataFrame, inputColumn: String, outputColumn: String): DataFrame = {
-  // val tokenizer = new Tokenizer().setInputCol(inputColumn).setOutputCol("token")
-  val tokenizer = new RegexTokenizer().setInputCol(inputColumn).setOutputCol("token").setPattern("\\W")
-  val stopwordsremover = new StopWordsRemover().setInputCol("token").setOutputCol(outputColumn)
+val schema = StructType(Seq(
+    StructField("indices", ArrayType(LongType, true), true), 
+    StructField("size", LongType, true),
+    StructField("type", ShortType, true), 
+    StructField("values", ArrayType(DoubleType, true), true)
+))
 
-  val pipeline = new Pipeline().setStages(Array(tokenizer, stopwordsremover))
-  val model = pipeline.fit(df)
+val tf_df_schema = StructType(Seq(StructField("tf_df", schema, true)))
+val idf_df_schema = StructType(Seq(StructField("idf_df", schema, true)))
 
-  return model.transform(df)
-}
+val getitem = ((column: Column, member: String) => from_json(to_json(struct(column)), schema).getItem(member))
 
-def TFIDF(df: DataFrame, inputColumn: String, outputColumn: String): DataFrame = {
-  val countvectorizer = new CountVectorizer().setInputCol(inputColumn).setOutputCol("tf")
-  val idf = new IDF().setInputCol("tf").setOutputCol(outputColumn)
+case class Intermediate(_type: ByteType, size: Int, indices: Array[Int], values: Array[Double]) // extends UserDefinedType
 
-  val pipeline = new Pipeline().setStages(Array(countvectorizer, idf))
-  val model = pipeline.fit(df)
-
-  return model.transform(df)
-}
-
-// Register the UDAF with Spark SQL
-// spark.udf.register("gm", new GeometricMean)
-
-val dataframe = json_to_rdd("musical.json", columns = Array("reviewText", "overall"))
-
+// val itemgetter = udf((xs: Intermediate, member: String) => xs.member))
+val get_indices = udf((xs: Intermediate) => xs.indices)
+val get_values = udf((xs: Intermediate) => xs.values)
 
 // User Defined Aggregate Function
-def transform(df: DataFrame): DataFrame = {
-  val terms = preprocessing(dataframe, "reviewText", "terms").select("terms")
-  val tfidf = TFIDF(terms, "terms", "idf")
+def transform(df: DataFrame, inputColumn: String = "reviewText"): (DataFrame, DataFrame) = {
+  val tokenizer = new RegexTokenizer().setInputCol(inputColumn).setOutputCol("token").setPattern("\\W")
+  val stopwordsremover = new StopWordsRemover().setInputCol("token").setOutputCol("words")
+  val countvectorizer = new CountVectorizer().setInputCol("words").setOutputCol("tf_df")
+  val idf = new IDF().setInputCol("tf_df").setOutputCol("idf_df")
 
-  // println((overall, tfidf.collect))
+  val stages: Array[PipelineStage] = Array(tokenizer, stopwordsremover, countvectorizer, idf)
 
-  return tfidf
+  val pipeline = new Pipeline().setStages(stages)
+  val model = pipeline.fit(df)
+
+  val terms_model: CountVectorizerModel = model.stages(stages.indexOf(countvectorizer)).asInstanceOf[CountVectorizerModel]
+
+  val transformed = model.transform(df) // .withColumn("tf_df", vector2array($"tf_df")).withColumn("idf_df", vector2array($"idf_df"))
+
+  val outputdf = transformed.select(from_json(to_json(struct($"tf_df")), tf_df_schema).getItem("tf_df").getItem("indices") as "indices", from_json(to_json(struct($"tf_df")), tf_df_schema).getItem("tf_df").getItem("values") as "tf", from_json(to_json(struct($"idf_df")), idf_df_schema).getItem("idf_df").getItem("values") as "idf")
+  // outputdf.show(truncate=true)
+
+  return (Seq((terms_model.vocabulary)).toDF("terms"), outputdf)
 }
 
-val rating_dfs: Map[Int, DataFrame] = (1 to 5).map(rating => (rating, transform(dataframe.where($"overall" === rating)))).toMap
-val overall_df = transform(dataframe)
 
-for ((rating, df) <- rating_dfs) {
-  // println((rating, df.collect))
-  df.repartition(1).write.format("json").option("header", "true").save(s"rating_$rating.txt")
+val dataframe = json_to_rdd("musical.json", columns = Array("reviewText", "overall"))
+val rating_dfs: Map[Any, (DataFrame, DataFrame)] = List(1, 2, 3, 4, 5, "overall").map(rating => (rating, transform(if (rating.isInstanceOf[String]) dataframe else dataframe.where($"overall" === rating)))).toMap
+
+for ((rating, (terms: DataFrame, df: DataFrame)) <- rating_dfs) {
+  val basename: String = "project/" + (if (rating.isInstanceOf[String]) "overall" else s"rating_$rating")
+  terms.repartition(1).write.mode("overwrite").format("json").save(s"$basename.terms.json")
+  df.repartition(1).write.mode("overwrite").format("json").save(s"$basename.df.json")
 }
-
-// println(("overall", overall_dfs.collect))
-overall_df.repartition(1).write.format("json").option("header", "true").save("overall.txt")
-
-// // Schema
-// println(tfidf.schema)
 
 // Exit the program
 System.exit(0)
