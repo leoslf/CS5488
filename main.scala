@@ -1,7 +1,7 @@
 import org.apache.spark.ml.{Pipeline, PipelineModel, PipelineStage}
 import org.apache.spark.ml.classification.LogisticRegression
 import org.apache.spark.ml.feature.{CountVectorizer, CountVectorizerModel, Tokenizer, RegexTokenizer, StopWordsRemover, IDF}
-import org.apache.spark.ml.linalg.Vector
+import org.apache.spark.ml.linalg.{Vector, DenseVector}
 import org.apache.spark.sql.{DataFrame, Row, Column}
 import org.apache.spark.sql.expressions.{MutableAggregationBuffer, UserDefinedAggregateFunction}
 import org.apache.spark.sql.types._
@@ -13,22 +13,29 @@ def json_to_rdd(path: String, columns: Array[String] = Array("*")): DataFrame = 
   return df.select(columns.head, columns.tail: _*)
 }
 
-val schema = StructType(Seq(
-    StructField("indices", ArrayType(LongType, true), true), 
-    StructField("size", LongType, true),
-    StructField("type", ShortType, true), 
-    StructField("values", ArrayType(DoubleType, true), true)
-))
+// val schema = StructType(Seq(
+//     StructField("indices", ArrayType(LongType, true), true), 
+//     StructField("size", LongType, true),
+//     StructField("type", ShortType, true), 
+//     StructField("values", ArrayType(DoubleType, true), true)
+// ))
+// 
+// val tf_df_schema = StructType(Seq(StructField("tf_df", schema, true)))
+// val tfidf_df_schema = StructType(Seq(StructField("tfidf_df", schema, true)))
 
-val tf_df_schema = StructType(Seq(StructField("tf_df", schema, true)))
-val tfidf_df_schema = StructType(Seq(StructField("tfidf_df", schema, true)))
+// val getitem = ((column: Column, member: String) => from_json(to_json(struct(column)), schema).getItem(member))
 
-val getitem = ((column: Column, member: String) => from_json(to_json(struct(column)), schema).getItem(member))
+// case class Intermediate(_type: ByteType, size: Int, indices: Array[Int], values: Array[Double]) // extends UserDefinedType
 
-case class Intermediate(_type: ByteType, size: Int, indices: Array[Int], values: Array[Double]) // extends UserDefinedType
+// val get_indices = udf((xs: Intermediate) => xs.indices)
+// val get_values = udf((xs: Intermediate) => xs.values)
 
-val get_indices = udf((xs: Intermediate) => xs.indices)
-val get_values = udf((xs: Intermediate) => xs.values)
+val toDense = udf((xs: Vector) => xs.toDense)
+def vectorsum(a: Array[Double], b: Array[Double]): Array[Double] = {
+  return (a, b).zipped.map(_ + _)
+}
+
+val agg_vectorsum = (df: DataFrame, column: Column) => df.select(column).rdd.map { case Row(v: Vector) => v.toDense.toArray }.reduce(vectorsum)
 
 // User Defined Aggregate Function
 def transform(df: DataFrame, inputColumn: String = "reviewText"): (DataFrame, DataFrame) = {
@@ -52,7 +59,12 @@ def transform(df: DataFrame, inputColumn: String = "reviewText"): (DataFrame, Da
   // outputdf.show(truncate=true)
 
   // return (Seq((terms_model.vocabulary)).toDF("terms"), outputdf)
-  return (Seq((terms_model.vocabulary)).toDF("terms"), model.transform(df).select("tf", "tfidf"))
+  val outputdf = model.transform(df).select("tf", "tfidf")
+
+  val corpusdf = (terms_model.vocabulary, agg_vectorsum(outputdf, $"tf"), agg_vectorsum(outputdf, $"tfidf")).zipped.toSeq.toDF("term", "tf", "tfidf") // .select($"term", outputdf.agg(sum($"tf")) as "tf", outputdf.agg(sum($"tfidf")) as "tfidf")
+  // outputdf.agg(sum($"tfidf" / $"tf")), outputdf.
+
+  return (corpusdf, outputdf)
 }
 
 

@@ -19,13 +19,15 @@ print(df_filename)
 # terms <- stream_in(textConnection(readLines(terms_filename)))
 # data <- stream_in(textConnection(readLines(df_filename)))
 
-data <- read.json(df_filename, multiline = TRUE)
+# data <- read.json(df_filename, multiline = TRUE)
 terms <- read.json(terms_filename, multiline = TRUE)
 
-data_r <- collect(data)
-head(data_r$tf)
+# head(data)
 # summary(terms)
 # head(terms)
+
+terms_r <- collect(terms)
+print(terms_r)
 # head(data)
 # summary(data)
 
