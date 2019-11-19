@@ -21,13 +21,12 @@ val schema = StructType(Seq(
 ))
 
 val tf_df_schema = StructType(Seq(StructField("tf_df", schema, true)))
-val idf_df_schema = StructType(Seq(StructField("idf_df", schema, true)))
+val tfidf_df_schema = StructType(Seq(StructField("tfidf_df", schema, true)))
 
 val getitem = ((column: Column, member: String) => from_json(to_json(struct(column)), schema).getItem(member))
 
 case class Intermediate(_type: ByteType, size: Int, indices: Array[Int], values: Array[Double]) // extends UserDefinedType
 
-// val itemgetter = udf((xs: Intermediate, member: String) => xs.member))
 val get_indices = udf((xs: Intermediate) => xs.indices)
 val get_values = udf((xs: Intermediate) => xs.values)
 
@@ -35,8 +34,10 @@ val get_values = udf((xs: Intermediate) => xs.values)
 def transform(df: DataFrame, inputColumn: String = "reviewText"): (DataFrame, DataFrame) = {
   val tokenizer = new RegexTokenizer().setInputCol(inputColumn).setOutputCol("token").setPattern("\\W")
   val stopwordsremover = new StopWordsRemover().setInputCol("token").setOutputCol("words")
-  val countvectorizer = new CountVectorizer().setInputCol("words").setOutputCol("tf_df")
-  val idf = new IDF().setInputCol("tf_df").setOutputCol("idf_df")
+  // val countvectorizer = new CountVectorizer().setInputCol("words").setOutputCol("tf_df")
+  // val idf = new IDF().setInputCol("tf_df").setOutputCol("tfidf_df")
+  val countvectorizer = new CountVectorizer().setInputCol("words").setOutputCol("tf")
+  val idf = new IDF().setInputCol("tf").setOutputCol("tfidf")
 
   val stages: Array[PipelineStage] = Array(tokenizer, stopwordsremover, countvectorizer, idf)
 
@@ -45,12 +46,13 @@ def transform(df: DataFrame, inputColumn: String = "reviewText"): (DataFrame, Da
 
   val terms_model: CountVectorizerModel = model.stages(stages.indexOf(countvectorizer)).asInstanceOf[CountVectorizerModel]
 
-  val transformed = model.transform(df) // .withColumn("tf_df", vector2array($"tf_df")).withColumn("idf_df", vector2array($"idf_df"))
+  // val transformed = model.transform(df)
 
-  val outputdf = transformed.select(from_json(to_json(struct($"tf_df")), tf_df_schema).getItem("tf_df").getItem("indices") as "indices", from_json(to_json(struct($"tf_df")), tf_df_schema).getItem("tf_df").getItem("values") as "tf", from_json(to_json(struct($"idf_df")), idf_df_schema).getItem("idf_df").getItem("values") as "idf")
+  // val outputdf = transformed.select(from_json(to_json(struct($"tf_df")), tf_df_schema).getItem("tf_df").getItem("indices") as "indices", from_json(to_json(struct($"tf_df")), tf_df_schema).getItem("tf_df").getItem("values") as "tf", from_json(to_json(struct($"tfidf_df")), tfidf_df_schema).getItem("tfidf_df").getItem("values") as "tfidf")
   // outputdf.show(truncate=true)
 
-  return (Seq((terms_model.vocabulary)).toDF("terms"), outputdf)
+  // return (Seq((terms_model.vocabulary)).toDF("terms"), outputdf)
+  return (Seq((terms_model.vocabulary)).toDF("terms"), model.transform(df).select("tf", "tfidf"))
 }
 
 
