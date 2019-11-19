@@ -73,7 +73,7 @@ val rating_dfs: Map[Any, (DataFrame, DataFrame)] = List(1, 2, 3, 4, 5, "overall"
 
 for ((rating, (terms: DataFrame, df: DataFrame)) <- rating_dfs) {
   val basename: String = "project/" + (if (rating.isInstanceOf[String]) "overall" else s"rating_$rating")
-  terms.repartition(1).write.mode("overwrite").format("json").save(s"$basename.terms.json")
+  terms.repartition(1).write.mode("overwrite").option("header", "true").format("csv").save(s"$basename.terms.csv")
   df.repartition(1).write.mode("overwrite").format("json").save(s"$basename.df.json")
 }
 

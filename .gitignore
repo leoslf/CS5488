@@ -6,3 +6,4 @@ metastore_db/*
 *.log
 *.crc
 *.json
+*.csv
