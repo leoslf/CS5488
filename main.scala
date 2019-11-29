@@ -8,7 +8,7 @@ import org.apache.spark.sql.types._
 import org.apache.spark.sql.functions._
 import spark.implicits._
 
-def json_to_rdd(path: String, columns: Array[String] = Array("*")): DataFrame = {
+def json_to_df(path: String, columns: Array[String] = Array("*")): DataFrame = {
   val df = spark.read.json(path)
   return df.select(columns.head, columns.tail: _*)
 }
@@ -68,7 +68,7 @@ def transform(df: DataFrame, inputColumn: String = "reviewText"): (DataFrame, Da
 }
 
 
-val dataframe = json_to_rdd("musical.json", columns = Array("reviewText", "overall"))
+val dataframe = json_to_df("musical.json", columns = Array("reviewText", "overall"))
 val rating_dfs: Map[Any, (DataFrame, DataFrame)] = List(1, 2, 3, 4, 5, "overall").map(rating => (rating, transform(if (rating.isInstanceOf[String]) dataframe else dataframe.where($"overall" === rating)))).toMap
 
 for ((rating, (terms: DataFrame, df: DataFrame)) <- rating_dfs) {
