@@ -8,7 +8,7 @@ import org.apache.spark.sql.{DataFrame, Row, Column}
 import org.apache.spark.sql.expressions.{MutableAggregationBuffer, UserDefinedAggregateFunction}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.functions._
-import org.apache.spark.ml.clustering.LDA
+import org.apache.spark.ml.clustering.{LDA, LDAModel}
 import spark.implicits._
 
 def json_to_df(path: String, columns: Array[String] = Array("*")): DataFrame = {
@@ -41,12 +41,12 @@ def vectorColToDF(df: DataFrame, column_name: String, header: Array[String]): Da
   return df_.select(sqlexpr : _*)
 }
 
-def transform(df: DataFrame, inputColumn: String = "reviewText", idColumn: String = "id"): (DataFrame, DataFrame, Array[String]) = { // Matrix, Matrix) = {
+def transform(df: DataFrame, inputColumn: String = "reviewText", idColumn: String = "id"): (DataFrame, DataFrame, Array[String], DataFrame) = { 
   val tokenizer = new RegexTokenizer().setInputCol(inputColumn).setOutputCol("token").setPattern("\\W")
   val stopwordsremover = new StopWordsRemover().setInputCol("token").setOutputCol("words")
   val countvectorizer = new CountVectorizer().setInputCol("words").setOutputCol("tf")
   val idf = new IDF().setInputCol("tf").setOutputCol("tfidf")
-  val lda = new LDA().setK(10).setMaxIter(10).setFeaturesCol("tfidf").setTopicDistributionCol("lda")
+  val lda = new LDA().setK(10).setMaxIter(10).setFeaturesCol("tf").setTopicDistributionCol("lda")
 
   val stages: Array[PipelineStage] = Array(tokenizer, stopwordsremover, countvectorizer, idf, lda)
   val pipeline = new Pipeline().setStages(stages)
@@ -54,9 +54,10 @@ def transform(df: DataFrame, inputColumn: String = "reviewText", idColumn: Strin
 
   val terms_model: CountVectorizerModel = model.stages(stages.indexOf(countvectorizer)).asInstanceOf[CountVectorizerModel]
   val idf_model: IDFModel = model.stages(stages.indexOf(idf)).asInstanceOf[IDFModel]
+  val lda_model: LDAModel = model.stages(stages.indexOf(lda)).asInstanceOf[LDAModel]
 
   // val df_by_documents = model.transform(df).select($"document_id", $"tf", $"tfidf", $"lda")
-  val df_by_documents = model.transform(df).select($"document_id", $"tf", $"tfidf", activeEntries($"tf") as "n", $"lda")
+  val df_by_documents = model.transform(df).select($"document_id", $"tf", $"tfidf") // , activeEntries($"tf") as "n")
 
   val df_count = df.count()
 
@@ -69,13 +70,18 @@ def transform(df: DataFrame, inputColumn: String = "reviewText", idColumn: Strin
 
   val df_by_terms: DataFrame = (terms, idf_model.idf.toArray).zipped.toSeq.toDF("term", "idf").withColumn("df", round(exp(-$"idf" + lit(log_D_plus1)) - lit(1)))
 
-  return (df_by_terms, df_by_documents, terms) 
+  val toWords = udf((x : Seq[Int]) => { x.map(i => terms(i)) })
+
+  val df_lda = lda_model.describeTopics(10).withColumn("topicWords", toWords($"termIndices")).select("topicWords", "termWeights")
+
+
+  return (df_by_terms, df_by_documents, terms, df_lda) 
 }
 
 val dataframe = json_to_df("musical.json", columns = Array("reviewText", "overall"))
-val rating_dfs: Map[Any, (DataFrame, DataFrame, Array[String])] = List(1, 2, 3, 4, 5, "overall").map(rating => (rating, transform(if (rating.isInstanceOf[String]) dataframe else dataframe.where($"overall" === rating)))).toMap
+val rating_dfs: Map[Any, (DataFrame, DataFrame, Array[String], DataFrame)] = List(1, 2, 3, 4, 5, "overall").map(rating => (rating, transform(if (rating.isInstanceOf[String]) dataframe else dataframe.where($"overall" === rating)))).toMap
 
-for ((rating, (df_by_terms: DataFrame, df_by_documents: DataFrame, terms: Array[String])) <- rating_dfs) {
+for ((rating, (df_by_terms: DataFrame, df_by_documents: DataFrame, terms: Array[String], df_lda: DataFrame)) <- rating_dfs) {
   val basename: String = "project/" + (if (rating.isInstanceOf[String]) "overall" else s"rating_$rating")
   df_by_terms.write.mode("overwrite").option("header", "true").format("csv").save(s"$basename.terms.csv")
   df_by_documents.write.mode("overwrite").format("json").save(s"$basename.documents.json")
@@ -83,6 +89,7 @@ for ((rating, (df_by_terms: DataFrame, df_by_documents: DataFrame, terms: Array[
   vectorColToDF(df_by_documents, "tf", terms).write.mode("overwrite").option("header", "true").format("csv").save(s"$basename.tf.csv")
   vectorColToDF(df_by_documents, "tfidf", terms).write.mode("overwrite").option("header", "true").format("csv").save(s"$basename.tfidf.csv")
 
+  df_lda.write.mode("overwrite").format("json").save(s"$basename.lda.json")
 }
 
 // Exit the program
