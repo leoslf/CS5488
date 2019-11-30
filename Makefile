@@ -12,8 +12,9 @@ MAIN_SCRIPT = main.scala
 GENERATE_CHART_SCRIPT = generate_chart.R
 
 OUTPUTS_BASE = overall $(shell for i in `seq 5`; do echo "rating_$$i"; done)
-OUTPUTS_BASENAME = $(patsubst %, %.terms, $(OUTPUTS_BASE)) $(patsubst %, %.tf, $(OUTPUTS_BASE)) $(patsubst %, %.tfidf, $(OUTPUTS_BASE)) # $(patsubst %, %.documents, $(OUTPUTS_BASE))
-OUTPUTS_FILENAME = $(addprefix $(OUTPUT_DIR)/, $(patsubst %, %.$(OUTPUT_EXTENSION), $(OUTPUTS_BASENAME))) $(addprefix $(OUTPUT_DIR)/, $(patsubst %, %.json, $(patsubst %, %.documents, $(OUTPUTS_BASE))))
+OUTPUTS_BASENAME = $(patsubst %, %.terms, $(OUTPUTS_BASE)) $(patsubst %, %.tf, $(OUTPUTS_BASE)) $(patsubst %, %.tfidf, $(OUTPUTS_BASE))  # $(patsubst %, %.documents, $(OUTPUTS_BASE))
+OUTPUTS_BASENAME_FOR_JSON = $(patsubst %, %.documents, $(OUTPUTS_BASE)) $(patsubst %, %.lda, $(OUTPUTS_BASE))
+OUTPUTS_FILENAME = $(addprefix $(OUTPUT_DIR)/, $(patsubst %, %.$(OUTPUT_EXTENSION), $(OUTPUTS_BASENAME))) $(addprefix $(OUTPUT_DIR)/, $(patsubst %, %.json, $(OUTPUTS_BASENAME_FOR_JSON)))
 # OUTPUTS_FILENAME = $(addprefix $(OUTPUT_DIR)/, $(patsubst %, %.$(OUTPUT_EXTENSION), $(patsubst %, %.terms, $(OUTPUTS_BASE))) $(patsubst %, %.json, $(patsubst %, %.documents, $(OUTPUTS_BASE))))
 CHARTS_FILENAME = $(addprefix $(CHARTS_DIR)/, $(patsubst %, %.png, $(OUTPUTS_BASE)))
 
